@@ -1,403 +1,446 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  Search, 
-  Newspaper, 
-  Briefcase, 
-  TrendingUp, 
-  Filter, 
-  ChevronRight, 
-  Activity,
-  Globe,
-  Cpu,
-  HeartPulse,
-  Landmark,
-  Factory,
-  ArrowUpRight,
-  BookOpen,
-  X,
-  Loader2,
-  AlertCircle
-} from 'lucide-react';
+import { useState, useEffect, useCallback } from "react";
 
-// --- CONFIGURATION & FALLBACKS ---
-const API_KEY = ''; // Leave empty to use mock data, or paste your GNews API key here
-const TRENDING_TOPICS = ["Multi-Agent Orchestration", "Edge AI Agents", "Autonomous Auditing", "Self-Healing Code", "Robotic Process Agents"];
+// ─── Anthropic API helper ──────────────────────────────────────────────────
+const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 
-const MOCK_NEWS = [
-  {
-    id: 'm1',
-    title: "GlobalPharma Deploys Swarm Agents for Accelerated Drug Discovery",
-    summary: "A network of specialized AI agents has successfully simulated complex protein folding scenarios, reducing initial screening times by 80%.",
-    industry: "Healthcare",
-    impact: 9.2,
-    date: "2026-02-25",
-    source: "BioTech Insider",
-    tags: ["Swarm Intelligence", "R&D"],
-    featured: true
-  },
-  {
-    id: 'm2',
-    title: "FinTech Giant Replaces Level 1 Support with Empathetic Negotiation Agents",
-    summary: "Customer service in banking takes a leap as new autonomous agents not only resolve queries but negotiate minor fee waivers and draft personalized financial plans.",
-    industry: "Finance",
-    impact: 8.5,
-    date: "2026-02-24",
-    source: "Financial Times",
-    tags: ["Customer Experience", "Autonomy"]
-  },
-  {
-    id: 'm3',
-    title: "Supply Chain Agents Predict and Mitigate Pacific Shipping Delays",
-    summary: "Using real-time weather and geopolitical data, logistics agents successfully rerouted $2B worth of cargo autonomously.",
-    industry: "Logistics",
-    impact: 7.9,
-    date: "2026-02-20",
-    source: "Logistics Weekly",
-    tags: ["Predictive Analytics", "Routing"]
-  }
-];
+async function fetchAgenticNews(query = "agentic AI agents latest news 2025") {
+  const response = await fetch(ANTHROPIC_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      system: `You are a news curator specializing in Agentic AI. 
+Return ONLY a valid JSON array (no markdown, no backticks) of exactly 8 news items.
+Each item must have these keys:
+- title: string (headline, max 90 chars)
+- summary: string (2-sentence summary, max 200 chars)
+- source: string (publication name)
+- date: string (relative like "2 hours ago", "Yesterday", "3 days ago")
+- category: one of ["Frameworks", "Research", "Products", "Enterprise", "Open Source", "Policy"]
+- url: string (real URL if available, else "#")
+- sentiment: one of ["bullish", "neutral", "critical"]`,
+      messages: [
+        {
+          role: "user",
+          content: `Search the web for the latest news about: ${query}. Return the JSON array only.`,
+        },
+      ],
+    }),
+  });
 
-const INDUSTRIES = [
-  { name: "All", icon: Globe },
-  { name: "Software", icon: Cpu },
-  { name: "Healthcare", icon: HeartPulse },
-  { name: "Finance", icon: Landmark },
-  { name: "Manufacturing", icon: Factory },
-  { name: "Logistics", icon: Activity },
-  { name: "Education", icon: BookOpen },
-];
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  const data = await response.json();
 
-// --- UTILITY COMPONENTS ---
+  // Extract text from all content blocks
+  const fullText = data.content
+    .map((b) => (b.type === "text" ? b.text : ""))
+    .join("")
+    .trim();
 
-const Badge = ({ children, className = "", onClick }) => (
-  <span 
-    onClick={onClick}
-    className={`px-2.5 py-0.5 rounded-full text-xs font-medium transition-all ${className} ${onClick ? 'cursor-pointer hover:ring-1 hover:ring-offset-1 ring-indigo-300' : ''}`}
-  >
-    {children}
-  </span>
-);
+  // Strip markdown fences if present
+  const clean = fullText.replace(/```json|```/gi, "").trim();
 
-const ImpactScore = ({ score }) => {
-  let colorClass = "text-green-600 bg-green-100 border-green-200";
-  if (score >= 9.0) colorClass = "text-purple-700 bg-purple-100 border-purple-200";
-  else if (score < 8.0) colorClass = "text-blue-600 bg-blue-100 border-blue-200";
+  // Find JSON array
+  const start = clean.indexOf("[");
+  const end = clean.lastIndexOf("]");
+  if (start === -1 || end === -1) throw new Error("No JSON array found");
 
-  return (
-    <div className={`flex items-center gap-1 border px-2 py-1 rounded-md ${colorClass}`}>
-      <Activity size={14} />
-      <span className="text-sm font-bold">{score}</span>
-    </div>
-  );
+  return JSON.parse(clean.slice(start, end + 1));
+}
+
+// ─── Category config ───────────────────────────────────────────────────────
+const CATEGORIES = ["All", "Frameworks", "Research", "Products", "Enterprise", "Open Source", "Policy"];
+
+const CAT_COLORS = {
+  Frameworks:   { bg: "#1a2f1a", text: "#4ade80", border: "#166534" },
+  Research:     { bg: "#1a1a3a", text: "#818cf8", border: "#3730a3" },
+  Products:     { bg: "#2a1a1a", text: "#fb923c", border: "#9a3412" },
+  Enterprise:   { bg: "#1a2a2a", text: "#22d3ee", border: "#0e7490" },
+  "Open Source":{ bg: "#2a2a1a", text: "#facc15", border: "#854d0e" },
+  Policy:       { bg: "#2a1a2a", text: "#e879f9", border: "#7e22ce" },
 };
 
-// --- MAIN APPLICATION ---
+const SENTIMENT_ICONS = { bullish: "↑", neutral: "→", critical: "↓" };
+const SENTIMENT_COLORS = { bullish: "#4ade80", neutral: "#94a3b8", critical: "#f87171" };
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState('feed');
-  const [selectedIndustry, setSelectedIndustry] = useState('All');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedArticle, setSelectedArticle] = useState(null);
-  const [newsData, setNewsData] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
+// ─── Search topics ─────────────────────────────────────────────────────────
+const TOPICS = [
+  { label: "All Agentic AI", query: "agentic AI agents latest news 2025" },
+  { label: "Agent Frameworks", query: "LangGraph AutoGen CrewAI agent frameworks 2025" },
+  { label: "Research Papers", query: "agentic AI research papers arxiv 2025" },
+  { label: "Enterprise AI", query: "enterprise agentic AI deployment products 2025" },
+  { label: "OpenAI / Anthropic", query: "OpenAI Anthropic agentic features agents 2025" },
+  { label: "Multi-Agent Systems", query: "multi-agent systems orchestration 2025" },
+];
 
-  // --- DATA FETCHING LOGIC ---
-  useEffect(() => {
-    const fetchNews = async () => {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        if (!API_KEY) {
-          // Simulate network delay for mock data
-          await new Promise(resolve => setTimeout(resolve, 800));
-          setNewsData(MOCK_NEWS);
-          setIsLoading(false);
-          return;
-        }
-
-        const q = encodeURIComponent('"AI agent" OR "autonomous agent" OR "Agentic AI"');
-        const url = `https://gnews.io/api/v4/search?q=${q}&lang=en&max=10&apikey=${API_KEY}`;
-        
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('API limit reached or network error');
-        
-        const data = await response.json();
-        
-        // Map raw API data to our app's enriched format
-        const enrichedArticles = data.articles.map((item, idx) => {
-          // Logic to synthetically categorize news based on keywords
-          const text = (item.title + item.description).toLowerCase();
-          let industry = "Software";
-          if (text.includes("health") || text.includes("drug") || text.includes("medical")) industry = "Healthcare";
-          else if (text.includes("bank") || text.includes("finance") || text.includes("audit")) industry = "Finance";
-          else if (text.includes("factory") || text.includes("robot") || text.includes("manufacturing")) industry = "Manufacturing";
-          else if (text.includes("ship") || text.includes("logistics") || text.includes("supply")) industry = "Logistics";
-          else if (text.includes("learn") || text.includes("education") || text.includes("tutor")) industry = "Education";
-
-          return {
-            id: `api-${idx}`,
-            title: item.title,
-            summary: item.description,
-            industry,
-            impact: (Math.random() * (9.9 - 7.5) + 7.5).toFixed(1), // Randomly assigned impact for UI
-            date: new Date(item.publishedAt).toLocaleDateString(),
-            source: item.source.name,
-            tags: ["AI", "Agents", "Automation"],
-            featured: idx === 0 && selectedIndustry === 'All'
-          };
-        });
-
-        setNewsData(enrichedArticles.length > 0 ? enrichedArticles : MOCK_NEWS);
-      } catch (err) {
-        // Silently handle the fetch error to avoid triggering console error overlays in the preview environment
-        setError("Live data connection restricted in this preview. Showing cached results.");
-        setNewsData(MOCK_NEWS);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchNews();
-  }, [selectedIndustry]); // Re-fetch or re-process when industry changes
-
-  // --- FILTERING ---
-  const filteredNews = useMemo(() => {
-    return newsData.filter(article => {
-      const matchesIndustry = selectedIndustry === 'All' || article.industry === selectedIndustry;
-      const matchesSearch = article.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                            article.summary.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesIndustry && matchesSearch;
-    });
-  }, [newsData, selectedIndustry, searchQuery]);
-
-  const featuredArticle = filteredNews.find(n => n.featured) || filteredNews[0];
-
+// ─── Skeleton loader ───────────────────────────────────────────────────────
+function SkeletonCard() {
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-12">
-      
-      {/* HEADER */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-2 cursor-pointer" onClick={() => {setSelectedIndustry('All'); setSearchQuery('');}}>
-              <div className="bg-indigo-600 p-2 rounded-lg">
-                <Cpu className="text-white h-6 w-6" />
-              </div>
-              <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 hidden sm:block">
-                AgenticTracker
-              </span>
-            </div>
-            
-            <nav className="flex space-x-2 md:space-x-8">
-              <button 
-                onClick={() => setActiveTab('feed')}
-                className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'feed' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600 hover:bg-slate-50'}`}
-              >
-                <Newspaper size={18} /> <span className="hidden sm:inline">News Feed</span>
-              </button>
-              <button 
-                onClick={() => setActiveTab('insights')}
-                className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'insights' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600 hover:bg-slate-50'}`}
-              >
-                <TrendingUp size={18} /> <span className="hidden sm:inline">Insights</span>
-              </button>
-            </nav>
-
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 h-4 w-4" />
-              <input 
-                type="text" 
-                placeholder="Search agents..." 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 pr-4 py-2 border border-slate-300 rounded-full text-sm focus:ring-2 focus:ring-indigo-500 w-32 sm:w-64 transition-all"
-              />
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {error && (
-          <div className="mb-6 bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-center gap-3 text-amber-800 text-sm">
-            <AlertCircle size={18} /> {error}
-          </div>
-        )}
-
-        {activeTab === 'feed' ? (
-          <div className="flex flex-col lg:flex-row gap-8">
-            
-            {/* SIDEBAR */}
-            <aside className="lg:w-1/4">
-              <div className="bg-white rounded-xl border border-slate-200 p-5 sticky top-24 shadow-sm">
-                <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                  <Filter size={16} className="text-indigo-600" /> Sectors
-                </h3>
-                <div className="space-y-1">
-                  {INDUSTRIES.map((ind) => (
-                    <button
-                      key={ind.name}
-                      onClick={() => setSelectedIndustry(ind.name)}
-                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-all ${
-                        selectedIndustry === ind.name 
-                          ? 'bg-indigo-600 text-white shadow-md' 
-                          : 'text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <ind.icon size={16} />
-                        <span className="font-medium">{ind.name}</span>
-                      </div>
-                      {selectedIndustry === ind.name && <ChevronRight size={14} />}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="mt-8 pt-6 border-t border-slate-100">
-                  <h4 className="text-xs font-bold text-slate-400 uppercase mb-4 tracking-wider">Trending Now</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {TRENDING_TOPICS.map(topic => (
-                      <Badge 
-                        key={topic} 
-                        onClick={() => setSearchQuery(topic)}
-                        className="bg-white text-slate-600 border border-slate-200 hover:border-indigo-300"
-                      >
-                        #{topic}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </aside>
-
-            {/* FEED */}
-            <div className="lg:w-3/4 flex flex-col gap-6">
-              {isLoading ? (
-                <div className="flex flex-col items-center justify-center py-24 bg-white rounded-2xl border border-slate-200">
-                  <Loader2 className="h-10 w-10 text-indigo-600 animate-spin mb-4" />
-                  <p className="text-slate-500 font-medium">Analyzing global agentic data...</p>
-                </div>
-              ) : (
-                <>
-                  {/* FEATURED HERO */}
-                  {featuredArticle && !searchQuery && (
-                    <div className="bg-slate-900 rounded-2xl p-8 text-white relative overflow-hidden shadow-xl">
-                      <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl -mr-20 -mt-20"></div>
-                      <div className="relative z-10">
-                        <Badge className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 mb-4">Latest Breakthrough</Badge>
-                        <h2 className="text-2xl sm:text-3xl font-bold mb-4">{featuredArticle.title}</h2>
-                        <p className="text-slate-300 mb-6 text-lg line-clamp-2">{featuredArticle.summary}</p>
-                        <div className="flex items-center justify-between pt-6 border-t border-slate-800">
-                          <span className="text-sm text-slate-400">{featuredArticle.source} &bull; {featuredArticle.date}</span>
-                          <button 
-                            onClick={() => setSelectedArticle(featuredArticle)}
-                            className="bg-white text-slate-900 px-5 py-2 rounded-lg font-semibold flex items-center gap-2 hover:bg-indigo-50 transition-colors"
-                          >
-                            Read Analysis <ArrowUpRight size={18} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-bold text-slate-800">News Feed: {selectedIndustry}</h3>
-                    <span className="text-xs text-slate-500 uppercase tracking-widest">{filteredNews.length} Reports</span>
-                  </div>
-
-                  {/* ARTICLE LIST */}
-                  <div className="grid gap-4">
-                    {filteredNews.map((article) => (
-                      <article 
-                        key={article.id} 
-                        onClick={() => setSelectedArticle(article)}
-                        className="bg-white p-5 rounded-xl border border-slate-200 hover:border-indigo-300 transition-all cursor-pointer group shadow-sm hover:shadow-md"
-                      >
-                        <div className="flex justify-between items-start mb-3">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-indigo-600 uppercase tracking-tighter">{article.source}</span>
-                            <span className="text-slate-300">|</span>
-                            <span className="text-xs text-slate-500">{article.date}</span>
-                          </div>
-                          <ImpactScore score={article.impact} />
-                        </div>
-                        <h4 className="text-lg font-bold text-slate-900 mb-2 group-hover:text-indigo-600 transition-colors">{article.title}</h4>
-                        <p className="text-slate-600 text-sm line-clamp-2 mb-4">{article.summary}</p>
-                        <div className="flex gap-2">
-                          <Badge className="bg-slate-100 text-slate-500 border border-transparent">{article.industry}</Badge>
-                          {article.tags.map(t => <span key={t} className="text-[10px] text-slate-400 uppercase mt-1">#{t}</span>)}
-                        </div>
-                      </article>
-                    ))}
-                    {filteredNews.length === 0 && (
-                      <div className="text-center py-20">
-                        <p className="text-slate-400">No agentic use cases found for this criteria.</p>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        ) : (
-          /* INSIGHTS VIEW */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center col-span-full mb-4">
-              <h2 className="text-2xl font-bold mb-2">Market Sentiment Analysis</h2>
-              <p className="text-slate-500">Real-time tracking of autonomous agent adoption across global markets.</p>
-            </div>
-            {[
-              { label: "Top Adopting Sector", val: "Software Eng", desc: "45% of workflows agent-assisted" },
-              { label: "Avg. ROI Improvement", val: "22.4%", desc: "Reported by Early Adopters" },
-              { label: "Active Orchestrators", val: "14.2k", desc: "Enterprise-grade deployments" }
-            ].map(stat => (
-              <div key={stat.label} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <span className="text-xs font-bold text-indigo-600 uppercase">{stat.label}</span>
-                <div className="text-3xl font-bold my-2">{stat.val}</div>
-                <p className="text-sm text-slate-500">{stat.desc}</p>
-              </div>
-            ))}
-          </div>
-        )}
-      </main>
-
-      {/* ARTICLE MODAL */}
-      {selectedArticle && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedArticle(null)}></div>
-          <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[85vh] overflow-y-auto relative z-10 shadow-2xl animate-in zoom-in-95 duration-200">
-            <div className="sticky top-0 bg-white/95 backdrop-blur-md px-8 py-6 border-b flex justify-between items-center z-20">
-              <div className="flex gap-3 items-center">
-                <Badge className="bg-indigo-600 text-white">{selectedArticle.industry}</Badge>
-                <span className="text-xs text-slate-400">{selectedArticle.date}</span>
-              </div>
-              <button onClick={() => setSelectedArticle(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                <X size={24} />
-              </button>
-            </div>
-            <div className="p-8">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="text-sm font-bold text-indigo-600">{selectedArticle.source}</span>
-                <ImpactScore score={selectedArticle.impact} />
-              </div>
-              <h2 className="text-3xl font-bold text-slate-900 mb-6 leading-tight">{selectedArticle.title}</h2>
-              <div className="space-y-4 text-slate-600 leading-relaxed text-lg">
-                <p className="font-medium text-slate-900">{selectedArticle.summary}</p>
-                <p>This development signifies a major shift in how the {selectedArticle.industry} industry leverages autonomous reasoning. By shifting from static automation to dynamic agents, organizations are reporting significant reductions in operational overhead and faster response times to edge-case scenarios.</p>
-                <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 text-indigo-900 text-base">
-                  <h5 className="font-bold flex items-center gap-2 mb-2"><Activity size={18}/> Agentic Impact Analysis</h5>
-                  The deployment of autonomous agents in this context suggests a Level 3.5 Autonomy (Human-on-the-loop). Long-term projections indicate that this use case will become the industry standard by Q3 2026.
-                </div>
-              </div>
-              <div className="mt-8 pt-8 border-t flex flex-wrap gap-2">
-                {selectedArticle.tags.map(t => <Badge key={t} className="bg-slate-100 text-slate-600">#{t}</Badge>)}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+    <div style={{
+      background: "rgba(255,255,255,0.03)",
+      border: "1px solid rgba(255,255,255,0.06)",
+      borderRadius: 12,
+      padding: 20,
+      animation: "pulse 1.5s ease-in-out infinite",
+    }}>
+      <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+        <div style={{ width:80, height:20, borderRadius:20, background:"rgba(255,255,255,0.07)" }}/>
+        <div style={{ width:60, height:20, borderRadius:20, background:"rgba(255,255,255,0.05)" }}/>
+      </div>
+      <div style={{ height:18, borderRadius:4, background:"rgba(255,255,255,0.08)", marginBottom:8 }}/>
+      <div style={{ height:18, borderRadius:4, background:"rgba(255,255,255,0.06)", marginBottom:8, width:"85%" }}/>
+      <div style={{ height:14, borderRadius:4, background:"rgba(255,255,255,0.05)", width:"60%" }}/>
     </div>
   );
 }
+
+// ─── News Card ─────────────────────────────────────────────────────────────
+function NewsCard({ item, index }) {
+  const cat = CAT_COLORS[item.category] || CAT_COLORS.Research;
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <a
+      href={item.url !== "#" ? item.url : undefined}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{ textDecoration: "none", display:"block" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <div style={{
+        background: hovered ? "rgba(255,255,255,0.055)" : "rgba(255,255,255,0.025)",
+        border: `1px solid ${hovered ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.06)"}`,
+        borderRadius: 12,
+        padding: "18px 20px",
+        cursor: "pointer",
+        transition: "all 0.2s ease",
+        transform: hovered ? "translateY(-2px)" : "translateY(0)",
+        animationDelay: `${index * 60}ms`,
+        animation: "slideUp 0.4s ease both",
+      }}>
+        {/* Top row */}
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10, flexWrap:"wrap" }}>
+          <span style={{
+            fontSize: 11, fontWeight: 700, letterSpacing: "0.08em",
+            padding: "3px 10px", borderRadius: 20,
+            background: cat.bg, color: cat.text, border: `1px solid ${cat.border}`,
+          }}>
+            {item.category.toUpperCase()}
+          </span>
+          <span style={{
+            fontSize: 12, fontWeight: 600,
+            color: SENTIMENT_COLORS[item.sentiment],
+            marginLeft: "auto",
+          }}>
+            {SENTIMENT_ICONS[item.sentiment]} {item.sentiment}
+          </span>
+        </div>
+
+        {/* Title */}
+        <h3 style={{
+          margin: "0 0 8px",
+          fontSize: 14.5,
+          fontWeight: 700,
+          color: "#f1f5f9",
+          lineHeight: 1.45,
+          fontFamily: "'DM Serif Display', Georgia, serif",
+          letterSpacing: "0.01em",
+        }}>
+          {item.title}
+        </h3>
+
+        {/* Summary */}
+        <p style={{
+          margin: "0 0 12px",
+          fontSize: 12.5,
+          color: "#94a3b8",
+          lineHeight: 1.6,
+        }}>
+          {item.summary}
+        </p>
+
+        {/* Footer */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          <span style={{ fontSize: 11.5, color: "#64748b", fontWeight: 600 }}>
+            {item.source}
+          </span>
+          <span style={{ fontSize: 11, color: "#475569" }}>
+            {item.date}
+          </span>
+        </div>
+      </div>
+    </a>
+  );
+}
+
+// ─── Main App ──────────────────────────────────────────────────────────────
+export default function App() {
+  const [news, setNews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [activeTopic, setActiveTopic] = useState(0);
+  const [activeCategory, setActiveCategory] = useState("All");
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [searchText, setSearchText] = useState("");
+
+  const loadNews = useCallback(async (topicIndex) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const items = await fetchAgenticNews(TOPICS[topicIndex].query);
+      setNews(items);
+      setLastUpdated(new Date());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadNews(activeTopic);
+  }, [activeTopic, loadNews]);
+
+  const filtered = news.filter((n) => {
+    const matchCat = activeCategory === "All" || n.category === activeCategory;
+    const matchSearch = !searchText ||
+      n.title.toLowerCase().includes(searchText.toLowerCase()) ||
+      n.summary.toLowerCase().includes(searchText.toLowerCase());
+    return matchCat && matchSearch;
+  });
+
+  return (
+    <>
+      {/* Global styles */}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=Syne:wght@700;800&display=swap');
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #060912; min-height: 100vh; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(12px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes gradientShift {
+          0%, 100% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+        }
+      `}</style>
+
+      <div style={{
+        minHeight: "100vh",
+        background: "#060912",
+        fontFamily: "'DM Mono', monospace",
+        color: "#e2e8f0",
+      }}>
+        {/* Ambient background blobs */}
+        <div style={{
+          position: "fixed", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 0,
+        }}>
+          <div style={{
+            position: "absolute", width: 600, height: 600, borderRadius: "50%",
+            background: "radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%)",
+            top: -200, left: -100,
+          }}/>
+          <div style={{
+            position: "absolute", width: 500, height: 500, borderRadius: "50%",
+            background: "radial-gradient(circle, rgba(16,185,129,0.06) 0%, transparent 70%)",
+            bottom: -150, right: -100,
+          }}/>
+        </div>
+
+        <div style={{ position: "relative", zIndex: 1, maxWidth: 1100, margin: "0 auto", padding: "0 20px" }}>
+
+          {/* Header */}
+          <header style={{ paddingTop: 48, paddingBottom: 32 }}>
+            <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:16 }}>
+              <div>
+                <div style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)",
+                  borderRadius: 20, padding: "4px 12px", marginBottom: 14,
+                }}>
+                  <span style={{ width:7, height:7, borderRadius:"50%", background:"#6366f1", display:"inline-block",
+                    boxShadow:"0 0 8px #6366f1", animation:"pulse 2s ease-in-out infinite" }}/>
+                  <span style={{ fontSize:11, letterSpacing:"0.1em", color:"#a5b4fc", fontWeight:500 }}>
+                    LIVE INTELLIGENCE FEED
+                  </span>
+                </div>
+                <h1 style={{
+                  fontFamily: "'Syne', sans-serif",
+                  fontSize: "clamp(28px, 5vw, 48px)",
+                  fontWeight: 800,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.1,
+                  background: "linear-gradient(135deg, #f1f5f9 30%, #818cf8 100%)",
+                  backgroundSize: "200% 200%",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  backgroundClip: "text",
+                  animation: "gradientShift 6s ease infinite",
+                }}>
+                  Agentic AI<br/>News Tracker
+                </h1>
+                {lastUpdated && (
+                  <p style={{ marginTop: 10, fontSize: 11.5, color: "#475569" }}>
+                    Last updated · {lastUpdated.toLocaleTimeString()}
+                  </p>
+                )}
+              </div>
+
+              <button
+                onClick={() => loadNews(activeTopic)}
+                disabled={loading}
+                style={{
+                  marginTop: 8,
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "10px 20px",
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 8, color: "#94a3b8", fontSize: 12,
+                  cursor: loading ? "not-allowed" : "pointer",
+                  fontFamily: "'DM Mono', monospace",
+                  transition: "all 0.2s",
+                  opacity: loading ? 0.5 : 1,
+                }}
+              >
+                <span style={{ display:"inline-block", animation: loading ? "spin 1s linear infinite" : "none" }}>⟳</span>
+                {loading ? "Fetching..." : "Refresh"}
+              </button>
+            </div>
+
+            {/* Search */}
+            <div style={{ marginTop: 24, position: "relative" }}>
+              <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:"#475569", fontSize:14 }}>⌕</span>
+              <input
+                type="text"
+                placeholder="Filter news by keyword..."
+                value={searchText}
+                onChange={e => setSearchText(e.target.value)}
+                style={{
+                  width: "100%", padding: "10px 14px 10px 38px",
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 8, color: "#e2e8f0", fontSize: 13,
+                  fontFamily: "'DM Mono', monospace",
+                  outline: "none",
+                  transition: "border-color 0.2s",
+                }}
+                onFocus={e => e.target.style.borderColor = "rgba(99,102,241,0.5)"}
+                onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.08)"}
+              />
+            </div>
+          </header>
+
+          {/* Topic tabs */}
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:16 }}>
+            {TOPICS.map((t, i) => (
+              <button
+                key={i}
+                onClick={() => { setActiveTopic(i); setActiveCategory("All"); }}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: 20, fontSize: 12, fontWeight: 600,
+                  fontFamily: "'DM Mono', monospace",
+                  cursor: "pointer", transition: "all 0.2s",
+                  background: activeTopic === i ? "#6366f1" : "rgba(255,255,255,0.04)",
+                  border: `1px solid ${activeTopic === i ? "#6366f1" : "rgba(255,255,255,0.08)"}`,
+                  color: activeTopic === i ? "#fff" : "#64748b",
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Category filters */}
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:28 }}>
+            {CATEGORIES.map(cat => (
+              <button
+                key={cat}
+                onClick={() => setActiveCategory(cat)}
+                style={{
+                  padding: "5px 14px",
+                  borderRadius: 20, fontSize: 11, fontWeight: 600,
+                  fontFamily: "'DM Mono', monospace",
+                  letterSpacing: "0.05em",
+                  cursor: "pointer", transition: "all 0.2s",
+                  background: activeCategory === cat
+                    ? (CAT_COLORS[cat]?.bg || "rgba(255,255,255,0.1)")
+                    : "transparent",
+                  border: `1px solid ${activeCategory === cat
+                    ? (CAT_COLORS[cat]?.border || "rgba(255,255,255,0.2)")
+                    : "rgba(255,255,255,0.06)"}`,
+                  color: activeCategory === cat
+                    ? (CAT_COLORS[cat]?.text || "#fff")
+                    : "#475569",
+                }}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div style={{
+              background: "rgba(239,68,68,0.1)", border:"1px solid rgba(239,68,68,0.3)",
+              borderRadius:10, padding:"14px 18px", marginBottom:24, fontSize:13, color:"#fca5a5",
+            }}>
+              ⚠ {error} — Make sure your Anthropic API key proxy is configured.
+            </div>
+          )}
+
+          {/* Grid */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            gap: 14,
+            paddingBottom: 60,
+          }}>
+            {loading
+              ? Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} />)
+              : filtered.length === 0
+                ? (
+                  <div style={{
+                    gridColumn: "1/-1", textAlign:"center",
+                    padding:"60px 20px", color:"#475569", fontSize:14,
+                  }}>
+                    No articles match your filters.
+                  </div>
+                )
+                : filtered.map((item, i) => (
+                  <NewsCard key={i} item={item} index={i} />
+                ))
+            }
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            borderTop: "1px solid rgba(255,255,255,0.06)",
+            padding: "20px 0",
+            textAlign: "center",
+            fontSize: 11,
+            color: "#334155",
+          }}>
+            Powered by Claude AI with web search · Built with React
+          </div>
+
+        </div>
+      </div>
+    </>
+  );
+}
+
