@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ─── Anthropic API helper ──────────────────────────────────────────────────
-const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_API = "/api/claude";
 console.log("API Key present:", !!import.meta.env.VITE_ANTHROPIC_KEY);
 async function fetchAgenticNews(query = "agentic AI agents latest news 2025") {
   const response = await fetch(ANTHROPIC_API, {
