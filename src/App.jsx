@@ -1,78 +1,87 @@
-
-// ─── Anthropic API helper ──────────────────────────────────────────────────
 import { useState, useEffect, useCallback } from "react";
-const ANTHROPIC_API = "/.netlify/functions/claude-proxy";
-console.log("API Key present:", !!import.meta.env.ANTHROPIC_KEY);
-async function fetchAgenticNews(query = "agentic AI agents latest news 2025") {
-  const response = await fetch(ANTHROPIC_API, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      system: `You are a news curator specializing in Agentic AI. 
-Return ONLY a valid JSON array (no markdown, no backticks) of exactly 8 news items.
-Each item must have these keys:
-- title: string (headline, max 90 chars)
-- summary: string (2-sentence summary, max 200 chars)
-- source: string (publication name)
-- date: string (relative like "2 hours ago", "Yesterday", "3 days ago")
-- category: one of ["Frameworks", "Research", "Products", "Enterprise", "Open Source", "Policy"]
-- url: string (real URL if available, else "#")
-- sentiment: one of ["bullish", "neutral", "critical"]`,
-      messages: [
-        {
-          role: "user",
-          content: `Search the web for the latest news about: ${query}. Return the JSON array only.`,
-        },
-      ],
-    }),
-  });
 
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
+// ─── NewsData.io API helper ────────────────────────────────────────────────
+// Free tier: 200 requests/day, CORS supported — get key at https://newsdata.io
+const NEWSDATA_API_KEY = import.meta.env.VITE_NEWSDATA_API_KEY || "";
+
+function guessSentiment(title = "") {
+  const t = title.toLowerCase();
+  if (t.match(/launch|release|breakthrough|raises|funding|new|unveil|announce|partnership|growth/)) return "bullish";
+  if (t.match(/risk|warn|fail|concern|problem|issue|ban|restrict|danger|lawsuit|critic/)) return "critical";
+  return "neutral";
+}
+
+function guessCategory(title = "", description = "") {
+  const text = (title + " " + description).toLowerCase();
+  if (text.match(/langchain|langgraph|autogen|crewai|framework|sdk|library/)) return "Frameworks";
+  if (text.match(/research|paper|arxiv|study|benchmark/)) return "Research";
+  if (text.match(/enterprise|company|business|deploy|corporate|workforce/)) return "Enterprise";
+  if (text.match(/open.?source|github|open model|hugging/)) return "Open Source";
+  if (text.match(/regulation|policy|law|govern|eu ai|congress|senate/)) return "Policy";
+  return "Products";
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return "Recently";
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return "Yesterday";
+  return `${days} days ago`;
+}
+
+async function fetchAgenticNews(query = "agentic AI agents") {
+  if (!NEWSDATA_API_KEY) {
+    throw new Error("Add VITE_NEWSDATA_API_KEY to your Netlify environment variables — get a free key at newsdata.io");
+  }
+
+  const url = `https://newsdata.io/api/1/news?apikey=${NEWSDATA_API_KEY}&q=${encodeURIComponent(query)}&language=en`;
+  const response = await fetch(url);
+
+  if (!response.ok) throw new Error(`NewsData API error: ${response.status}`);
   const data = await response.json();
 
-  // Extract text from all content blocks
-  const fullText = data.content
-    .map((b) => (b.type === "text" ? b.text : ""))
-    .join("")
-    .trim();
+  if (!data.results || data.results.length === 0) {
+    throw new Error("No articles found — try a different topic");
+  }
 
-  // Strip markdown fences if present
-  const clean = fullText.replace(/```json|```/gi, "").trim();
-
-  // Find JSON array
-  const start = clean.indexOf("[");
-  const end = clean.lastIndexOf("]");
-  if (start === -1 || end === -1) throw new Error("No JSON array found");
-
-  return JSON.parse(clean.slice(start, end + 1));
+  return data.results.slice(0, 8).map((a) => ({
+    title: (a.title || "Untitled").slice(0, 90),
+    summary: (a.description || a.content || "No summary available.").slice(0, 200),
+    source: a.source_id || "Unknown",
+    date: timeAgo(a.pubDate),
+    category: guessCategory(a.title, a.description || ""),
+    url: a.link || "#",
+    sentiment: guessSentiment(a.title || ""),
+  }));
 }
 
 // ─── Category config ───────────────────────────────────────────────────────
 const CATEGORIES = ["All", "Frameworks", "Research", "Products", "Enterprise", "Open Source", "Policy"];
 
 const CAT_COLORS = {
-  Frameworks:   { bg: "#1a2f1a", text: "#4ade80", border: "#166534" },
-  Research:     { bg: "#1a1a3a", text: "#818cf8", border: "#3730a3" },
-  Products:     { bg: "#2a1a1a", text: "#fb923c", border: "#9a3412" },
-  Enterprise:   { bg: "#1a2a2a", text: "#22d3ee", border: "#0e7490" },
-  "Open Source":{ bg: "#2a2a1a", text: "#facc15", border: "#854d0e" },
-  Policy:       { bg: "#2a1a2a", text: "#e879f9", border: "#7e22ce" },
+  Frameworks:    { bg: "#1a2f1a", text: "#4ade80", border: "#166534" },
+  Research:      { bg: "#1a1a3a", text: "#818cf8", border: "#3730a3" },
+  Products:      { bg: "#2a1a1a", text: "#fb923c", border: "#9a3412" },
+  Enterprise:    { bg: "#1a2a2a", text: "#22d3ee", border: "#0e7490" },
+  "Open Source": { bg: "#2a2a1a", text: "#facc15", border: "#854d0e" },
+  Policy:        { bg: "#2a1a2a", text: "#e879f9", border: "#7e22ce" },
 };
 
-const SENTIMENT_ICONS = { bullish: "↑", neutral: "→", critical: "↓" };
+const SENTIMENT_ICONS  = { bullish: "↑", neutral: "→", critical: "↓" };
 const SENTIMENT_COLORS = { bullish: "#4ade80", neutral: "#94a3b8", critical: "#f87171" };
 
 // ─── Search topics ─────────────────────────────────────────────────────────
 const TOPICS = [
-  { label: "All Agentic AI", query: "agentic AI agents latest news 2025" },
-  { label: "Agent Frameworks", query: "LangGraph AutoGen CrewAI agent frameworks 2025" },
-  { label: "Research Papers", query: "agentic AI research papers arxiv 2025" },
-  { label: "Enterprise AI", query: "enterprise agentic AI deployment products 2025" },
-  { label: "OpenAI / Anthropic", query: "OpenAI Anthropic agentic features agents 2025" },
-  { label: "Multi-Agent Systems", query: "multi-agent systems orchestration 2025" },
+  { label: "All Agentic AI",     query: "agentic AI agents" },
+  { label: "Agent Frameworks",   query: "LangGraph AutoGen CrewAI agent framework" },
+  { label: "Research Papers",    query: "agentic AI research paper" },
+  { label: "Enterprise AI",      query: "enterprise agentic AI deployment" },
+  { label: "OpenAI / Anthropic", query: "OpenAI Anthropic AI agents" },
+  { label: "Multi-Agent Systems",query: "multi-agent systems AI orchestration" },
 ];
 
 // ─── Skeleton loader ───────────────────────────────────────────────────────
