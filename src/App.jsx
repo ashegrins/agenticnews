@@ -1,4 +1,3 @@
-import { useState, useEffect, useCallback } from "react";
 
 // ─── Anthropic API helper ──────────────────────────────────────────────────
 const ANTHROPIC_API = "/.netlify/functions/claude-proxy";
@@ -443,6 +442,7 @@ export default function App() {
     </>
   );
 }
+
 
 
 
