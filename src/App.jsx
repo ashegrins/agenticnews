@@ -1,5 +1,6 @@
 
 // ─── Anthropic API helper ──────────────────────────────────────────────────
+import { useState, useEffect, useCallback } from "react";
 const ANTHROPIC_API = "/.netlify/functions/claude-proxy";
 console.log("API Key present:", !!import.meta.env.ANTHROPIC_KEY);
 async function fetchAgenticNews(query = "agentic AI agents latest news 2025") {
